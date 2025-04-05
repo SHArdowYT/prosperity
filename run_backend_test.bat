@@ -1,2 +1,3 @@
-"C:\Users\Tinxb\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\prosperity3bt.exe" C:\Users\Tinxb\Documents\GitHub\prosperity\logger.py 0 --vis
+"C:\Users\Tinxb\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\prosperity3bt.exe" C:\Users\Tinxb\Documents\GitHub\prosperity\trader.py 0 --vis
+echo meow
 pause
