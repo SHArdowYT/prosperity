@@ -11,6 +11,10 @@ SPACING_POSITION = 32
 MM_EPSILON = 1
 REGRESSION_DATA_LENGTH = 20
 WEIGHT_MULTIPLIER = 5
+POP_AVE_LENGTH = 100 # unused rn
+MM_MULTIPLIER = 3
+LIQUIDATION_THRESHOLD = 10
+LQ_MULTIPLER = 0.1
 
 logger = Logger()
 
@@ -69,7 +73,7 @@ class Product:
         # prices_length = len(prices)
         return sum(prices), len(prices)
 
-    # find averages based from volume
+    # find averages based from volume for one instance
     def find_popular_average(self, order_depth: OrderDepth) -> float:
         ask_price_sum, ask_prices_length = self.process_popular_average(order_depth.sell_orders.items(), ask_mode=True)
         bid_sum, bid_prices_length = self.process_popular_average(order_depth.buy_orders.items(), ask_mode=False)
@@ -122,24 +126,52 @@ class Trader:
         # indicators
         self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018}
 
-    # handle ask tradings, we buy, looking for sell
-    def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, acceptable_price: int) -> List[Order]:
+    # handle ask tradings, we buy, looking for sell orders
+    def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, acceptable_price: int, state: TradingState, multipler: float) -> List[Order]:
         for best_ask, best_ask_amount in sorted_sell_orders.items():
+            logger.print(best_ask, best_ask_amount)
             if best_ask <= acceptable_price - MM_EPSILON: 
-                orders.append(Order(product, best_ask, -best_ask_amount))
+                orders.append(Order(product, best_ask, int(-best_ask_amount * multipler)))
+                # if product in state.position.keys():
+                #     if -best_ask_amount * MM_MULTIPLIER > -state.position[product]:
+                #         orders.append(Order(product, best_ask, -best_ask_amount * MM_MULTIPLIER))
+                #     else:
+                #         # orders.append(Order(product, best_ask, -state.position[product] + 50))
+                #         pass
+                # else:
+                #     if -best_ask_amount * MM_MULTIPLIER > 0:
+                #         orders.append(Order(product, best_ask, -best_ask_amount * MM_MULTIPLIER))
+                #     else:
+                #         # orders.append(Order(product, best_ask, 50))
+                #         pass
             # break
 
-    # handle sell tradings
-    def sell_mm(self, orders: List, sorted_buy_orders: dict, product: string, acceptable_price: int) -> List[Order]:
+    # handle bid tradings, we sell
+    def sell_mm(self, orders: List, sorted_buy_orders: dict, product: string, acceptable_price: int, state: TradingState, multipler: float) -> List[Order]:
         for best_bid, best_bid_amount in sorted_buy_orders.items():
             if best_bid >= acceptable_price + MM_EPSILON: 
-                orders.append(Order(product, best_bid, -best_bid_amount))
+                orders.append(Order(product, best_bid, int(-best_bid_amount * multipler)))
+                # if product in state.position.keys():
+                #     if best_bid_amount * MM_MULTIPLIER > -state.position[product]:
+                #         orders.append(Order(product, best_bid, -best_bid_amount * MM_MULTIPLIER))
+                #     else:
+                #         # orders.append(Order(product, best_bid, -state.position[product] - 50))
+                #         pass
+                # else:
+                #     if best_bid_amount * MM_MULTIPLIER > 0:
+                #         orders.append(Order(product, best_bid, -best_bid_amount * MM_MULTIPLIER))
+                #     else:
+                #         # orders.append(Order(product, best_bid, -50))
+                #         pass
             # break
 
     # reliquidates us to be happy and to make more profit YAY
     def handle_liquidation(self, state: TradingState, orders: List, product: string, fair_price: int) -> List[Order]:
         if product in state.position.keys():
-            orders.append(Order(product, fair_price, -state.position[product]))
+            if state.position[product] > LIQUIDATION_THRESHOLD:
+                orders.append(Order(product, fair_price, int((-state.position[product] + LIQUIDATION_THRESHOLD) * LQ_MULTIPLER)))
+            elif state.position[product] < -LIQUIDATION_THRESHOLD:
+                orders.append(Order(product, fair_price, int((-state.position[product] - LIQUIDATION_THRESHOLD) * LQ_MULTIPLER)))
 
     # retire
     def trade_regression(self, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int) -> List[Order]:
@@ -176,7 +208,9 @@ class Trader:
             # ========================================================================
             # UNIVERSAL
             # ========================================================================
-            self.handle_liquidation(state, orders, str(product), popular_price)
+            # self.handle_liquidation(state, orders, str(product), popular_price)
+
+            mm_price = popular_price
 
             # ========================================================================
             # HELP
@@ -185,17 +219,24 @@ class Trader:
 
                 # extra product specific
                 # choose acceptable price
-                m, c = product.regression(self.historical_data[product.name][-100:])
-                regression_price = m * (state.timestamp/100 + 1) + c
+                # m, c = product.regression(self.historical_data[product.name][-100:])
+                # regression_price = m * (state.timestamp/100 + 1) + c
                 # self.trade_regression(orders, buy_orders, sell_orders, product.name, regression_price)
+
+                # self.handle_liquidation(state, orders, str(product), popular_price)
+
+                mm_price = 2018
+                multipler = 1
 
             # ========================================================================
             # IN REFOREST RAINS
             # ========================================================================
-            elif str(product) == "RAINFOREST_RESIN":
+            elif product.name == "RAINFOREST_RESIN":
                 # choose acceptable price
                 # acceptable_price = popular_price
-                pass
+                self.handle_liquidation(state, orders, str(product), popular_price)
+                
+                multipler = MM_MULTIPLIER
     
 
             # ========================================================================
@@ -203,9 +244,8 @@ class Trader:
             # ========================================================================
             
             # market making
-            mm_price = popular_price
-            self.buy_mm(orders, sell_orders, str(product), mm_price)
-            self.sell_mm(orders, buy_orders, str(product), mm_price)
+            self.buy_mm(orders, sell_orders, str(product), mm_price, state, multipler)
+            self.sell_mm(orders, buy_orders, str(product), mm_price, state, multipler)
 
             # update our orders
             result[str(product)] = orders
