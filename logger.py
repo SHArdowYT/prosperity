@@ -2,6 +2,7 @@ import json
 from typing import Any, List
 import string
 import logger
+import numpy as np
 
 # this is a change
 
@@ -125,7 +126,9 @@ logger = Logger()
 class Trader:
 
     def __init__(self):
+        # past data
         self.historical_data = {"RAINFOREST_RESIN": [], "KELP": []}
+        self.past_ave = {"RAINFOREST_RESIN": -1, "KELP": -2}
        
         # indicators
         self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018}
@@ -134,19 +137,63 @@ class Trader:
     def find_worst_average(self, order_depth: OrderDepth):
         worst_ask = list(order_depth.sell_orders.items())[-1][0]
         worst_bid = list(order_depth.buy_orders.items())[-1][0]
-        average = (worst_ask + worst_bid) / 2
+        average = np.mean([worst_ask, worst_bid])
         return average
 
     # find average from best values
     def find_best_average(self, order_depth: OrderDepth):
-        worst_ask = list(order_depth.sell_orders.items())[0][0]
-        worst_bid = list(order_depth.buy_orders.items())[0][0]
-        average = (worst_ask + worst_bid) / 2
+        best_ask = list(order_depth.sell_orders.items())[0][0]
+        best_bid = list(order_depth.buy_orders.items())[0][0]
+        average = np.mean([best_ask, best_bid])
         return average
 
+    # find averages based from volume
+    def find_popular_average(self, order_depth: OrderDepth, product: string):
+        ask_items = []
+        ask_volume = 0
+        for ask_item in list(order_depth.sell_orders.items()):
+            if ask_item[1] < ask_volume:
+                ask_items = [ask_item]
+            elif ask_item[1] == ask_volume:
+                ask_items.append(ask_item)
+
+        ask_sum = sum(item[0] for item in ask_items)
+        ask_items_length = len(ask_items)
+
+        bid_items = []
+        bid_volume = 0
+        for bid_item in list(order_depth.buy_orders.items()):
+            if bid_item[1] > bid_volume:
+                bid_items = [bid_item]
+            elif bid_item[1] == bid_volume:
+                bid_items.append(bid_item)
+
+        bid_sum = sum(item[0] for item in bid_items)
+        bid_items_length = len(bid_items)
+
+        if (bid_items_length != 0 and ask_items_length != 0):
+            ask_average = ask_sum / ask_items_length
+            bid_average = bid_sum / bid_items_length
+            self.past_ave[product] = (ask_average + bid_average) / 2
+
+        return self.past_ave[product]
+
+ 
     # moving averages with given length
     def find_moving_average(self, averages: List, length: int):
         return sum(averages[-length:]) / len(averages[-length:]) # if (len(averages) != 0) else -1
+
+    def regression(self, somedata: list[int]) -> tuple[list]:
+        weight = lambda pos, length : round(pos / length * 5)
+        datapoints = []
+        counter = 0
+        for i in somedata:
+            for j in range(weight(i, len(somedata))):
+                datapoints.append([counter, i])
+            counter += 1
+
+        m, c = np.polyfit(np.array([datapoint[0] for datapoint in datapoints]), np.array([datapoint[1] for datapoint in datapoints]), deg=1)
+        return (m, c)
 
     # TODO for linear regres. not in progress rn
     def find_derivative(self, averages: List):
@@ -204,21 +251,24 @@ class Trader:
         order_depth = state.order_depths[product]
         # initalise
         # add to historical data
-        self.historical_data[product].append(self.find_best_average(order_depth))
+        self.historical_data[product].append(self.find_popular_average(order_depth, product))
         # orders to push in this timeframe
         orders: List[Order] = []
 
+        # sorting items
         # low to high
         sorted_sell_orders = dict(sorted(order_depth.sell_orders.items()))
         # high to low
         sorted_buy_orders = dict(reversed(sorted(order_depth.buy_orders.items())))
+
+
         logger.print(f"sell orders: {sorted_sell_orders}\n"
-                        f"buy orders: {sorted_buy_orders}")
+                     f"buy orders: {sorted_buy_orders}")
         # if state.timestamp >= 34000:
         #     self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018}
 
-        acceptable_price = self.acceptable_prices_dict[product]
-        # acceptable_price = self.find_moving_average(self.historical_data[product], 1000)
+        # acceptable_price = self.acceptable_prices_dict[product]
+        acceptable_price = self.find_moving_average(self.historical_data[product], 20)
 
         if True:
             # we buying, looking for sell orders
@@ -234,8 +284,9 @@ class Trader:
                 break
         
         # ending
-        logger.print(f"{product}'s average price is: {self.find_best_average(order_depth)}\n"
-                        f"{product}'s moving average price is : {self.find_moving_average(self.historical_data[product], 20)}")
+        # logger.print(f"{product}'s average price is: {self.find_best_average(order_depth)}\n"
+        logger.print(f"{product}'s moving average price is : {self.find_moving_average(self.historical_data[product], 20)}\n"
+                     f"{product}'s popular average price is : {self.find_popular_average(order_depth, product)}\n")
         result[product] = orders
 
         # ========================================================================
@@ -245,7 +296,7 @@ class Trader:
         order_depth = state.order_depths[product]
         # initalise
         # add to historical data
-        self.historical_data[product].append(self.find_best_average(order_depth))
+        self.historical_data[product].append(self.find_popular_average(order_depth, product))
         # orders to push in this timeframe
         orders: List[Order] = []
 
@@ -275,8 +326,9 @@ class Trader:
                 break
         
         # ending
-        logger.print(f"{product}'s average price is: {self.find_best_average(order_depth)}\n"
-                        f"{product}'s moving average price is : {self.find_moving_average(self.historical_data[product], 20)}")
+        # logger.print(f"{product}'s average price is: {self.find_best_average(order_depth)}\n"
+        logger.print(f"{product}'s moving average price is : {self.find_moving_average(self.historical_data[product], 20)}\n"
+                     f"{product}'s popular average price is : {self.find_popular_average(order_depth, product)}\n")
         result[product] = orders
 
         logger.flush(state, result, conversions, trader_data)
