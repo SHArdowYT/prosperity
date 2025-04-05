@@ -32,7 +32,7 @@ class Product:
 
 
     # update historical data, sort and return sell/buy orders, print info
-    def product_header(self, state: TradingState, historical_data) -> tuple[dict, OrderDepth]:
+    def product_header(self, state: TradingState, historical_data: dict[str: list]) -> tuple[dict, OrderDepth]:
         # current orders in market
         order_depth = state.order_depths[self.name]
 
@@ -210,7 +210,8 @@ class Trader:
             # ========================================================================
             # self.handle_liquidation(state, orders, str(product), popular_price)
 
-            mm_price = popular_price
+            mm_price = int(popular_price)
+            lq_price = int(popular_price)
 
             # ========================================================================
             # HELP
@@ -234,7 +235,7 @@ class Trader:
             elif product.name == "RAINFOREST_RESIN":
                 # choose acceptable price
                 # acceptable_price = popular_price
-                self.handle_liquidation(state, orders, str(product), popular_price)
+                self.handle_liquidation(state, orders, str(product), lq_price)
                 
                 multipler = MM_MULTIPLIER
     
