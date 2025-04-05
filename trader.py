@@ -10,7 +10,7 @@ KELP_MOVING_AVERAGE = 5
 SPACING_POSITION = 32
 MM_EPSILON = 1
 REGRESSION_DATA_LENGTH = 20
-WEIGHT_MULTIPLIER = 10
+WEIGHT_MULTIPLIER = 5
 
 logger = Logger()
 
@@ -125,21 +125,35 @@ class Trader:
     # handle ask tradings, we buy, looking for sell
     def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, acceptable_price: int) -> List[Order]:
         for best_ask, best_ask_amount in sorted_sell_orders.items():
-            if best_ask < acceptable_price - MM_EPSILON: 
+            if best_ask <= acceptable_price - MM_EPSILON: 
                 orders.append(Order(product, best_ask, -best_ask_amount))
-            break
+            # break
 
     # handle sell tradings
     def sell_mm(self, orders: List, sorted_buy_orders: dict, product: string, acceptable_price: int) -> List[Order]:
         for best_bid, best_bid_amount in sorted_buy_orders.items():
-            if best_bid > acceptable_price + MM_EPSILON: 
+            if best_bid >= acceptable_price + MM_EPSILON: 
                 orders.append(Order(product, best_bid, -best_bid_amount))
-            break
+            # break
 
     # reliquidates us to be happy and to make more profit YAY
     def handle_liquidation(self, state: TradingState, orders: List, product: string, fair_price: int) -> List[Order]:
         if product in state.position.keys():
             orders.append(Order(product, fair_price, -state.position[product]))
+
+    # retire
+    def trade_regression(self, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int) -> List[Order]:
+        for best_bid, best_bid_amount in sorted_buy_orders.items():
+            if best_bid >= price: 
+                orders.append(Order(product, best_bid, -best_bid_amount))
+            # break
+
+        for best_ask, best_ask_amount in sorted_sell_orders.items():
+            if best_ask <= price: 
+                orders.append(Order(product, best_ask, -best_ask_amount))
+            # break
+
+    
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         logger.print(f"chat, the time is {state.timestamp}")
@@ -157,6 +171,12 @@ class Trader:
             # update data, give sell and buy orders
             sell_orders, buy_orders, order_depth = product.product_header(state, self.historical_data)
             popular_price = product.find_popular_average(order_depth)
+            orders: List[Order] = []
+
+            # ========================================================================
+            # UNIVERSAL
+            # ========================================================================
+            self.handle_liquidation(state, orders, str(product), popular_price)
 
             # ========================================================================
             # HELP
@@ -165,11 +185,12 @@ class Trader:
 
                 # extra product specific
                 # choose acceptable price
-                m, c = product.regression(self.historical_data[product.name][-5:])
-                regression_price = m * (state.timestamp/100 + 2) + c
+                m, c = product.regression(self.historical_data[product.name][-100:])
+                regression_price = m * (state.timestamp/100 + 1) + c
+                # self.trade_regression(orders, buy_orders, sell_orders, product.name, regression_price)
 
             # ========================================================================
-            # RAINFOREST RESIN
+            # IN REFOREST RAINS
             # ========================================================================
             elif str(product) == "RAINFOREST_RESIN":
                 # choose acceptable price
@@ -181,11 +202,8 @@ class Trader:
             # UNIVERSAL
             # ========================================================================
             
+            # market making
             mm_price = popular_price
-
-            # trade, orders is the orders to push in this time frame
-            orders: List[Order] = []
-            self.handle_liquidation(state, orders, str(product), popular_price)
             self.buy_mm(orders, sell_orders, str(product), mm_price)
             self.sell_mm(orders, buy_orders, str(product), mm_price)
 
