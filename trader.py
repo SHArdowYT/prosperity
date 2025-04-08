@@ -3,26 +3,32 @@ import string
 import numpy as np
 from logger import Logger
 import json
+# import warnings
+
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
 KELP_MOVING_AVERAGE = 5
 SPACING_POSITION = 32
 MM_EPSILON = 1
-REGRESSION_DATA_LENGTH = 20
+REGRESSION_DATA_LENGTH = 100
+LINEAR_DATA_LENGTH = 1000
 WEIGHT_MULTIPLIER = 5
-POP_AVE_LENGTH = 100 # unused rn
+POP_AVE_LENGTH = 100
 MM_MULTIPLIER = 3
 LIQUIDATION_THRESHOLD = 10
 LQ_MULTIPLER = 0.1
+REG_EPSILON = 4e-13
+REG_OFFSET = 0
 
 logger = Logger()
+# warnings.simplefilter('ignore', np.RankWarning)
 
 class Product:
 
     def __init__(self, name: str):
         self.name = name
-        self.past_ave = {}
+        self.past_ave = []
 
     def __str__(self) -> str:
         return self.name
@@ -44,16 +50,6 @@ class Product:
         sorted_sell_orders = dict(sorted(order_depth.sell_orders.items()))
         # high to low
         sorted_buy_orders = dict(reversed(sorted(order_depth.buy_orders.items())))
-
-        logger.print(f"{'sell orders: '.ljust(SPACING_POSITION)}{sorted_sell_orders}\n"
-                     f"{'buy orders: '.ljust(SPACING_POSITION)}{sorted_buy_orders}")
-
-        logger.print(#f"{self.name}'s average price is: {self.find_best_average(order_depth)}\n"
-                     f"{self.name}{'\'s moving average price is:'.ljust(SPACING_POSITION - len(self.name))}{self.find_moving_average(historical_data[self.name], 20)}\n"
-                     f"{self.name}{'\'s popular average price is:'.ljust(SPACING_POSITION - len(self.name))}{self.find_popular_average(order_depth)}\n")
-
-        logger.print(f"{'the equ is: '.ljust(SPACING_POSITION)}{self.regression(historical_data[self.name][-REGRESSION_DATA_LENGTH:])}\n"
-                     f"{'the derivative is: '.ljust(SPACING_POSITION)}{self.find_derivative(historical_data[self.name])}")
 
         # logger.print(f"{'the data are: '.ljust(SPACING_POSITION)}{(historical_data[self.name])}\n")
 
@@ -78,13 +74,16 @@ class Product:
         ask_price_sum, ask_prices_length = self.process_popular_average(order_depth.sell_orders.items(), ask_mode=True)
         bid_sum, bid_prices_length = self.process_popular_average(order_depth.buy_orders.items(), ask_mode=False)
 
-        # logger.print(f"bidlen: {bid_prices_length} asklen: {ask_prices_length}")
         if (bid_prices_length != 0 and ask_prices_length != 0):
             ask_average = ask_price_sum / ask_prices_length
             bid_average = bid_sum / bid_prices_length
-            self.past_ave = (ask_average + bid_average) / 2
+            pop_ave = (ask_average + bid_average) / 2
+        else:
+            pop_ave = self.past_ave[-1]
+        
+        self.past_ave.append(pop_ave)
 
-        return self.past_ave
+        return pop_ave
 
     # moving averages with given length
     def find_moving_average(self, averages: List, length: int):
@@ -92,9 +91,8 @@ class Product:
 
     # calculate regression line
     def regression(self, somedata: list[int]) -> tuple[list]:
+        somedata = somedata[-REGRESSION_DATA_LENGTH:]
         if len(somedata) == 0:
-            logger.print("sobbbbb where did my data go")
-            logger.print("tinpat" + ("t" * 10))
             return (0, 0)
         elif len(somedata) <= 1:
             return (0, somedata[0])
@@ -110,6 +108,19 @@ class Product:
         m, c = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), w=np.exp(weighting_array), deg=1)
 
         return tuple(float(i) for i in (m, c))
+    
+    def linear_regression(self, somedata: list[int]) -> tuple[list]:
+        somedata = somedata[-LINEAR_DATA_LENGTH:]
+        if len(somedata) == 0:
+            logger.print("sobbbbb where did my data go")
+            logger.print("tinpat" + ("t" * 10))
+            return (0, 0)
+        elif len(somedata) <= 1:
+            return (0, somedata[0])
+
+        m, c = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), deg=1)
+
+        return tuple(float(i) for i in (m, c))
 
     # TODO for linear regres. not in progress rn
     def find_derivative(self, averages: List):
@@ -121,10 +132,10 @@ class Trader:
 
     def __init__(self):
         # past data
-        self.historical_data = {"RAINFOREST_RESIN": [], "KELP": []}
-        self.past_ave = {"RAINFOREST_RESIN": -1, "KELP": -2}
+        self.historical_data = {"RAINFOREST_RESIN": [], "KELP": [], "SQUID_INK": []}
+        self.past_ave = {"RAINFOREST_RESIN": -1, "KELP": -1, "SQUID_INK": -1}
         # indicators
-        self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018}
+        self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018, "SQUID_INK": 2005}
 
     # handle ask tradings, we buy, looking for sell orders
     def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, acceptable_price: int, state: TradingState, multipler: float) -> List[Order]:
@@ -173,28 +184,40 @@ class Trader:
             elif state.position[product] < -LIQUIDATION_THRESHOLD:
                 orders.append(Order(product, fair_price, int((-state.position[product] - LIQUIDATION_THRESHOLD) * LQ_MULTIPLER)))
 
-    # retire
+    
     def trade_regression(self, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int) -> List[Order]:
-        for best_bid, best_bid_amount in sorted_buy_orders.items():
-            if best_bid >= price: 
-                orders.append(Order(product, best_bid, -best_bid_amount))
-            # break
-
+        # buy
         for best_ask, best_ask_amount in sorted_sell_orders.items():
             if best_ask <= price: 
                 orders.append(Order(product, best_ask, -best_ask_amount))
-            # break
+        # sell
+        for best_bid, best_bid_amount in sorted_buy_orders.items():
+            if best_bid >= price: 
+                orders.append(Order(product, best_bid, -best_bid_amount))
 
     
+    def g_trade_regression(self, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int, m: float) -> List[Order]:
+        if m > 0 + REG_EPSILON:
+            # buy
+            for best_ask, best_ask_amount in sorted_sell_orders.items():
+                # if best_ask <= price: 
+                orders.append(Order(product, best_ask, -best_ask_amount))
+                logger.print("i am buying!")
+        elif m < 0 - REG_EPSILON:
+            # sell
+            for best_bid, best_bid_amount in sorted_buy_orders.items():
+                # if best_bid >= price: 
+                orders.append(Order(product, best_bid, -best_bid_amount))
+                logger.print("i am selling!")
 
+    
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        logger.print(f"chat, the time is {state.timestamp}")
 
         result = {}
         conversions = 0
         trader_data = ""
 
-        availible_products = ["KELP", "RAINFOREST_RESIN"]
+        availible_products = ["KELP", "RAINFOREST_RESIN", "SQUID_INK"]
 
 
         for availible_product in availible_products:
@@ -212,6 +235,7 @@ class Trader:
 
             mm_price = int(popular_price)
             lq_price = int(popular_price)
+            multipler = 1
 
             # ========================================================================
             # HELP
@@ -226,8 +250,11 @@ class Trader:
 
                 # self.handle_liquidation(state, orders, str(product), popular_price)
 
-                mm_price = 2018
-                multipler = 1
+                # mm_price = 2018
+
+                # temp
+                # self.handle_liquidation(state, orders, str(product), lq_price)
+                pass
 
             # ========================================================================
             # IN REFOREST RAINS
@@ -241,12 +268,31 @@ class Trader:
     
 
             # ========================================================================
+            # SQUID INK
+            # ========================================================================
+            elif product.name == "SQUID_INK":
+                # choose acceptable price
+                # acceptable_price = popular_price
+                # self.handle_liquidation(state, orders, str(product), lq_price)
+
+                lm, lc = product.linear_regression(product.past_ave)
+                logger.print(f"gradient is {lm}")
+                
+                m, c = product.regression(product.past_ave)
+                reg_price = m * (state.timestamp/100 + 1) + c
+                self.g_trade_regression(orders, buy_orders, sell_orders, product.name, reg_price, lm)
+
+                mm_price = reg_price
+                
+
+            # ========================================================================
             # UNIVERSAL
             # ========================================================================
             
-            # market making
-            self.buy_mm(orders, sell_orders, str(product), mm_price, state, multipler)
-            self.sell_mm(orders, buy_orders, str(product), mm_price, state, multipler)
+            # safe market making
+            if product.name != "SQUID_INK":
+                self.buy_mm(orders, sell_orders, str(product), mm_price, state, multipler)
+                self.sell_mm(orders, buy_orders, str(product), mm_price, state, multipler)
 
             # update our orders
             result[str(product)] = orders
