@@ -12,13 +12,14 @@ KELP_MOVING_AVERAGE = 5
 SPACING_POSITION = 32
 MM_EPSILON = 1
 REGRESSION_DATA_LENGTH = 100
-LINEAR_DATA_LENGTH = 1000
+LINEAR_DATA_LENGTH = 100    
 WEIGHT_MULTIPLIER = 5
 POP_AVE_LENGTH = 100
-MM_MULTIPLIER = 3
+MM_MULTIPLIER = 1
 LIQUIDATION_THRESHOLD = 10
 LQ_MULTIPLER = 0.1
-REG_EPSILON = 4e-13
+REG_M_EPSILON = 0.05
+REG_P_EPSILON = 100
 REG_OFFSET = 0
 
 logger = Logger()
@@ -38,21 +39,18 @@ class Product:
 
 
     # update historical data, sort and return sell/buy orders, print info
-    def product_header(self, state: TradingState, historical_data: dict[str: list]) -> tuple[dict, OrderDepth]:
+    def product_header(self, state: TradingState) -> tuple[dict, OrderDepth]:
         # current orders in market
         order_depth = state.order_depths[self.name]
 
         # add to historical data
-        historical_data[self.name].append(self.find_popular_average(order_depth))
+        self.past_ave.append(self.find_popular_average(order_depth))
 
         # sorting items
         # low to high
         sorted_sell_orders = dict(sorted(order_depth.sell_orders.items()))
         # high to low
         sorted_buy_orders = dict(reversed(sorted(order_depth.buy_orders.items())))
-
-        # logger.print(f"{'the data are: '.ljust(SPACING_POSITION)}{(historical_data[self.name])}\n")
-
 
         return (sorted_sell_orders, sorted_buy_orders, order_depth)
 
@@ -132,49 +130,37 @@ class Trader:
 
     def __init__(self):
         # past data
-        self.historical_data = {"RAINFOREST_RESIN": [], "KELP": [], "SQUID_INK": []}
-        self.past_ave = {"RAINFOREST_RESIN": -1, "KELP": -1, "SQUID_INK": -1}
+        self.products = [Product("RAINFOREST_RESIN"), Product("KELP"), Product("SQUID_INK")]
         # indicators
         self.acceptable_prices_dict = {"RAINFOREST_RESIN": 10000, "KELP": 2018, "SQUID_INK": 2005}
 
     # handle ask tradings, we buy, looking for sell orders
-    def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, acceptable_price: int, state: TradingState, multipler: float) -> List[Order]:
-        for best_ask, best_ask_amount in sorted_sell_orders.items():
-            logger.print(best_ask, best_ask_amount)
-            if best_ask <= acceptable_price - MM_EPSILON: 
-                orders.append(Order(product, best_ask, int(-best_ask_amount * multipler)))
-                # if product in state.position.keys():
-                #     if -best_ask_amount * MM_MULTIPLIER > -state.position[product]:
-                #         orders.append(Order(product, best_ask, -best_ask_amount * MM_MULTIPLIER))
-                #     else:
-                #         # orders.append(Order(product, best_ask, -state.position[product] + 50))
-                #         pass
-                # else:
-                #     if -best_ask_amount * MM_MULTIPLIER > 0:
-                #         orders.append(Order(product, best_ask, -best_ask_amount * MM_MULTIPLIER))
-                #     else:
-                #         # orders.append(Order(product, best_ask, 50))
-                #         pass
-            # break
+    def buy_mm(self, orders: List, sorted_sell_orders: dict, product: string, price: int, state: TradingState, multipler: float) -> List[Order]:
+        if product in state.position.keys():
+            position = state.position[product]
+        else:
+            position = 0
+
+        for bid_price, bid_volume in sorted_sell_orders.items():
+            if bid_price < price - MM_EPSILON:
+                orders.append(Order(product, bid_price, -bid_volume * MM_MULTIPLIER))
+
+        for i in range(1):
+            orders.append(Order(product, price - MM_EPSILON, 1))
 
     # handle bid tradings, we sell
-    def sell_mm(self, orders: List, sorted_buy_orders: dict, product: string, acceptable_price: int, state: TradingState, multipler: float) -> List[Order]:
-        for best_bid, best_bid_amount in sorted_buy_orders.items():
-            if best_bid >= acceptable_price + MM_EPSILON: 
-                orders.append(Order(product, best_bid, int(-best_bid_amount * multipler)))
-                # if product in state.position.keys():
-                #     if best_bid_amount * MM_MULTIPLIER > -state.position[product]:
-                #         orders.append(Order(product, best_bid, -best_bid_amount * MM_MULTIPLIER))
-                #     else:
-                #         # orders.append(Order(product, best_bid, -state.position[product] - 50))
-                #         pass
-                # else:
-                #     if best_bid_amount * MM_MULTIPLIER > 0:
-                #         orders.append(Order(product, best_bid, -best_bid_amount * MM_MULTIPLIER))
-                #     else:
-                #         # orders.append(Order(product, best_bid, -50))
-                #         pass
-            # break
+    def sell_mm(self, orders: List, sorted_buy_orders: dict, product: string, price: int, state: TradingState, multipler: float) -> List[Order]:
+        if product in state.position.keys():
+            position = state.position[product]
+        else:
+            position = 0
+
+        for ask_price, ask_volume in sorted_buy_orders.items():
+            if ask_price > price + MM_EPSILON:
+                orders.append(Order(product, ask_price, -ask_volume * MM_MULTIPLIER))
+
+        for i in range(1):
+            orders.append(Order(product, price + MM_EPSILON, -1))
 
     # reliquidates us to be happy and to make more profit YAY
     def handle_liquidation(self, state: TradingState, orders: List, product: string, fair_price: int) -> List[Order]:
@@ -196,41 +182,57 @@ class Trader:
                 orders.append(Order(product, best_bid, -best_bid_amount))
 
     
-    def g_trade_regression(self, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int, m: float) -> List[Order]:
-        if m > 0 + REG_EPSILON:
+    def g_trade_regression(self, state: TradingState, orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, product: string, price: int, m: float) -> List[Order]:
+        if m > 0 + REG_M_EPSILON:
             # buy
             for best_ask, best_ask_amount in sorted_sell_orders.items():
-                # if best_ask <= price: 
-                orders.append(Order(product, best_ask, -best_ask_amount))
-                logger.print("i am buying!")
-        elif m < 0 - REG_EPSILON:
+                if best_ask <= price + REG_P_EPSILON: 
+                    orders.append(Order(product, best_ask, -best_ask_amount))
+                    logger.print(f"Buying at {best_ask} for volume {-best_ask_amount}")
+        elif m < 0 - REG_M_EPSILON:
             # sell
             for best_bid, best_bid_amount in sorted_buy_orders.items():
-                # if best_bid >= price: 
-                orders.append(Order(product, best_bid, -best_bid_amount))
-                logger.print("i am selling!")
+                if best_bid >= price - REG_P_EPSILON: 
+                    orders.append(Order(product, best_bid, -best_bid_amount))
+                    logger.print(f"Selling at {best_bid} for volume {-best_bid_amount}")
+
+        else:
+            if product in state.position.keys():
+                lq_thres = 0
+                lq_multi = 1
+                if state.position[product] > lq_thres:
+                    orders.append(Order(product, price, int((-state.position[product] + lq_thres) * lq_multi)))
+                elif state.position[product] < -lq_thres:
+                    orders.append(Order(product, price, int((-state.position[product] - lq_thres) * lq_multi)))
+
 
     
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
 
-        result = {}
+        result: dict[str, list[Order]] = {}
         conversions = 0
         trader_data = ""
 
-        availible_products = ["KELP", "RAINFOREST_RESIN", "SQUID_INK"]
-
-
-        for availible_product in availible_products:
-            product = Product(availible_product)
+        for product in self.products:
 
             # update data, give sell and buy orders
-            sell_orders, buy_orders, order_depth = product.product_header(state, self.historical_data)
-            popular_price = product.find_popular_average(order_depth)
+            sell_orders, buy_orders, order_depth = product.product_header(state)
+            popular_price = product.past_ave[-1]
             orders: List[Order] = []
 
             # ========================================================================
             # UNIVERSAL
             # ========================================================================
+            # Order resetting
+            # if product.name in state.own_trades.keys():
+            #     for trade in state.own_trades[product.name]:
+            #         if trade.buyer == "SUBMISSION":
+            #             logger.print(f"buying quantity: {trade.quantity}")
+            #             orders.append(Order(product.name, trade.price, -trade.quantity))
+            #         elif trade.seller == "SUBMISSION":
+            #             logger.print(f"selling quantity: {trade.quantity}")
+            #             orders.append(Order(product.name, trade.price, trade.quantity))
+
             # self.handle_liquidation(state, orders, str(product), popular_price)
 
             mm_price = int(popular_price)
@@ -262,7 +264,7 @@ class Trader:
             elif product.name == "RAINFOREST_RESIN":
                 # choose acceptable price
                 # acceptable_price = popular_price
-                self.handle_liquidation(state, orders, str(product), lq_price)
+                self.handle_liquidation(state, orders, str(product), 10000)
                 
                 multipler = MM_MULTIPLIER
     
@@ -280,7 +282,7 @@ class Trader:
                 
                 m, c = product.regression(product.past_ave)
                 reg_price = m * (state.timestamp/100 + 1) + c
-                self.g_trade_regression(orders, buy_orders, sell_orders, product.name, reg_price, lm)
+                self.g_trade_regression(state, orders, buy_orders, sell_orders, product.name, reg_price, lm)
 
                 mm_price = reg_price
                 
@@ -294,10 +296,17 @@ class Trader:
                 self.buy_mm(orders, sell_orders, str(product), mm_price, state, multipler)
                 self.sell_mm(orders, buy_orders, str(product), mm_price, state, multipler)
 
-            # update our orders
-            result[str(product)] = orders
-
-
+            # simplify and update our orders
+            return_orders = {}
+            for order in orders:
+                return_orders[order.price] = 0
+            for order in orders:
+                return_orders[order.price] += order.quantity
+            orders = []
+            for price, amount in return_orders.items():
+                orders.append(Order(product.name, price, amount))
+            logger.print(f"{product.name} orders: {orders}")
+            result[product.name] = orders
 
         # ========================================================================
         # ENDING
