@@ -10,14 +10,14 @@ from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder
 
 KELP_MOVING_AVERAGE = 5
 SPACING_POSITION = 32
-REGRESSION_DATA_LENGTH = 1000
-LINEAR_DATA_LENGTH = 1000
+REGRESSION_DATA_LENGTH = 100
+LINEAR_DATA_LENGTH = 100    
 WEIGHT_MULTIPLIER = 5
 POP_AVE_LENGTH = 100
 LIQUIDATION_THRESHOLD = 40
 LQ_MULTIPLER = 0.1
-REG_M_EPSILON = 0.01
-REG_P_EPSILON = 10
+REG_M_EPSILON = 0.05
+REG_P_EPSILON = 100
 REG_OFFSET = 0
 
 logger = Logger()
@@ -92,7 +92,7 @@ class Product:
         return sum(averages[-length:]) / len(averages[-length:]) # if (len(averages) != 0) else -1
 
     # calculate regression line
-    def exp_regression(self, somedata: list[int]) -> tuple[list]:
+    def regression(self, somedata: list[int]) -> tuple[list]:
         somedata = somedata[-REGRESSION_DATA_LENGTH:]
         if len(somedata) == 0:
             return (0, 0)
@@ -107,11 +107,9 @@ class Product:
         weighting_array = [weight(i) for i in range(len(somedata))]
         # weighting_array = [1 for i in range(len(somedata))]
 
-        (m, c), res, _, _, _ = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), deg=1, full=True)
-        logger.print(f"res: {res}\n")
+        m, c = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), w=np.exp(weighting_array), deg=1)
 
-
-        return m, c, res
+        return tuple(float(i) for i in (m, c))
     
     def linear_regression(self, somedata: list[int]) -> tuple[list]:
         somedata = somedata[-LINEAR_DATA_LENGTH:]
@@ -120,8 +118,7 @@ class Product:
         elif len(somedata) <= 1:
             return (0, somedata[0])
 
-        (m, c), res, _, _, _ = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), deg=1, full=True)
-        logger.print(f"res: {res}\n")
+        m, c = np.polyfit(np.array([i for i in range(len(somedata))]), np.array([data for data in somedata]), deg=1)
 
         return tuple(float(i) for i in (m, c))
 
@@ -159,7 +156,19 @@ class Trader:
             # buying
             return_orders.append(Order(product, int(fair_price), int((-position - LIQUIDATION_THRESHOLD) * LQ_MULTIPLER)))
 
-    def trade_regression(self, product: str, position: int, return_orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, price: int, m: float) -> List[Order]:
+    
+    def trade_regression(self, product: str, position: int, return_orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, price: int) -> List[Order]:
+        # buy
+        for best_ask, best_ask_amount in sorted_sell_orders.items():
+            if best_ask <= price: 
+                return_orders.append(Order(product, best_ask, -best_ask_amount))
+        # sell
+        for best_bid, best_bid_amount in sorted_buy_orders.items():
+            if best_bid >= price: 
+                return_orders.append(Order(product, best_bid, -best_bid_amount))
+
+    
+    def g_trade_regression(self, product: str, position: int, return_orders: List, sorted_buy_orders: dict, sorted_sell_orders: dict, price: int, m: float) -> List[Order]:
         if m > 0 + REG_M_EPSILON:
             # buy
             for best_ask, best_ask_amount in sorted_sell_orders.items():
@@ -242,23 +251,17 @@ class Trader:
             # SQUID INK
             # ========================================================================
             elif product.name == "SQUID_INK":
-                mm_epsilon = 1
-
                 # calculate regression lines
-                # m, c = product.linear_regression(product.past_ave)
-                # m, c, res = product.exp_regression(product.past_ave)
-                # logger.print(f"price is {popular_price}\n gradient is {m}")
+                lm, lc = product.linear_regression(product.past_ave)
+                m, c = product.regression(product.past_ave)
+                logger.print(f"price is {popular_price}\nlinear gradient is {lm}\nexponent gradient is {m}")
 
                 # specific values
-                # reg_price = m * (state.timestamp/100 + 1) + c
+                reg_price = m * (state.timestamp/100 + 1) + c
+                mm_price = reg_price
+                lq_price = reg_price
 
-                # if len(res) > 0 and res[0] > 500:
-                    # pass
-                    # self.trade_regression(product.name, position, orders, buy_orders, sell_orders, reg_price, m)
-
-                # self.handle_liquidation(product.name, positions, orders, lq_price)
-                self.buy_mm(product.name, position, orders, sell_orders, mm_price - mm_epsilon)
-                self.sell_mm(product.name, position, orders, buy_orders, mm_price + mm_epsilon)
+                self.g_trade_regression(product.name, position, orders, buy_orders, sell_orders, reg_price, lm)
                 
 
             # ========================================================================
