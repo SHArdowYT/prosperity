@@ -1,2 +1,1 @@
-"C:\Users\Tinxb\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\prosperity3bt.exe" "trader backup Round 1 81k.py" 1 --vis --match-trades all
-pause 
+"C:\Users\Tinxb\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\prosperity3bt.exe" "trader.py" 1--2 2 --vis --match-trades all
